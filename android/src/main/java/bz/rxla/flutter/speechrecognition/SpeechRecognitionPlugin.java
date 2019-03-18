@@ -1,7 +1,9 @@
 package bz.rxla.flutter.speechrecognition;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
+import android.media.AudioManager;
 import android.os.Bundle;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
@@ -25,9 +27,12 @@ public class SpeechRecognitionPlugin implements MethodCallHandler, RecognitionLi
 
     private SpeechRecognizer speech;
     private MethodChannel speechChannel;
-    private String transcription = "";
+    private String partialTranscript = "";
     private Intent recognizerIntent;
     private Activity activity;
+
+    private Integer originalVolumeLevel;
+    private AudioManager audioManager;
 
     /**
      * Plugin registration.
@@ -41,6 +46,7 @@ public class SpeechRecognitionPlugin implements MethodCallHandler, RecognitionLi
         this.speechChannel = channel;
         this.speechChannel.setMethodCallHandler(this);
         this.activity = activity;
+        this.audioManager = (AudioManager) this.activity.getSystemService(Context.AUDIO_SERVICE);
 
         speech = SpeechRecognizer.createSpeechRecognizer(activity.getApplicationContext());
         speech.setRecognitionListener(this);
@@ -64,9 +70,15 @@ public class SpeechRecognitionPlugin implements MethodCallHandler, RecognitionLi
                 result.success(true);
                 break;
             case "speech.listen":
-                recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, getLocale(call.arguments.toString()));
-                speech.startListening(recognizerIntent);
-                result.success(true);
+                try {
+                    Integer originalVolumeLevel = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0);
+                    recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, getLocale(call.arguments.toString()));
+                    speech.startListening(recognizerIntent);
+                    result.success(true);
+                } finally {
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolumeLevel, 0);
+                }
                 break;
             case "speech.cancel":
                 speech.cancel();
@@ -101,7 +113,7 @@ public class SpeechRecognitionPlugin implements MethodCallHandler, RecognitionLi
     @Override
     public void onBeginningOfSpeech() {
         Log.d(LOG_TAG, "onRecognitionStarted");
-        transcription = "";
+        partialTranscript = "";
         speechChannel.invokeMethod("speech.onRecognitionStarted", null);
     }
 
@@ -118,7 +130,7 @@ public class SpeechRecognitionPlugin implements MethodCallHandler, RecognitionLi
     @Override
     public void onEndOfSpeech() {
         Log.d(LOG_TAG, "onEndOfSpeech");
-        speechChannel.invokeMethod("speech.onRecognitionComplete", transcription);
+        // speechChannel.invokeMethod("speech.onRecognitionComplete", transcription);
     }
 
     @Override
@@ -134,9 +146,9 @@ public class SpeechRecognitionPlugin implements MethodCallHandler, RecognitionLi
         ArrayList<String> matches = partialResults
                 .getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
         if (matches != null) {
-            transcription = matches.get(0);
+            partialTranscript = matches.get(0);
         }
-        sendTranscription(false);
+        sendTranscription(false, partialTranscript);
     }
 
     @Override
@@ -147,17 +159,18 @@ public class SpeechRecognitionPlugin implements MethodCallHandler, RecognitionLi
     @Override
     public void onResults(Bundle results) {
         Log.d(LOG_TAG, "onResults...");
+        sendTranscription(false, partialTranscript);
+
         ArrayList<String> matches = results
                 .getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
         if (matches != null) {
-            transcription = matches.get(0);
-            Log.d(LOG_TAG, "onResults -> " + transcription);
-            sendTranscription(true);
+            String finalTranscript = matches.get(0);
+            Log.d(LOG_TAG, "onResults -> " + finalTranscript);
+            sendTranscription(true, finalTranscript);
         }
-        sendTranscription(false);
     }
 
-    private void sendTranscription(boolean isFinal) {
-        speechChannel.invokeMethod(isFinal ? "speech.onRecognitionComplete" : "speech.onSpeech", transcription);
+    private void sendTranscription(boolean isFinal, String transcript) {
+        speechChannel.invokeMethod(isFinal ? "speech.onRecognitionComplete" : "speech.onSpeech", transcript);
     }
 }
